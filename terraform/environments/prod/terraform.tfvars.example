@@ -1,0 +1,28 @@
+# =============================================================================
+# Production Environment Configuration
+# =============================================================================
+# Copy this file to terraform.tfvars and fill in your values
+# DO NOT commit terraform.tfvars to version control
+# =============================================================================
+
+# GCP Project Configuration
+project_id = "your-project-id"  # Replace with your GCP project ID
+region     = "us-central1"
+environment = "prod"
+
+# Pub/Sub Configuration
+pubsub_topic_name            = "log-ingestion"
+pubsub_ack_deadline          = 600  # Maximum for push subscriptions
+pubsub_max_delivery_attempts = 5
+
+# Cloud Run - Ingest API
+# Leave empty to use placeholder image, or specify your image
+ingest_api_image         = ""
+ingest_api_min_instances = 0   # Scale to zero
+ingest_api_max_instances = 10
+
+# Cloud Run - Worker
+worker_image         = ""
+worker_min_instances = 0   # Scale to zero
+worker_max_instances = 10
+worker_timeout       = 540  # 9 minutes for long processing
