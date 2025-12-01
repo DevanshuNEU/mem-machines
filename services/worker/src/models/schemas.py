@@ -158,7 +158,7 @@ def redact_sensitive_data(text: str) -> str:
     Redact sensitive information from text.
     
     Currently redacts:
-    - Phone numbers (various formats)
+    - Phone numbers (various formats including 7-digit and 10-digit)
     - Email addresses
     - Social Security Numbers
     
@@ -168,11 +168,15 @@ def redact_sensitive_data(text: str) -> str:
     Returns:
         str: Text with sensitive data redacted
     """
-    # Phone numbers (e.g., 555-0199, (555) 555-0199, 555.555.0199)
-    phone_pattern = r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b'
-    text = re.sub(phone_pattern, '[REDACTED]', text)
+    # 10-digit phone numbers (e.g., 555-555-0199, 555.555.0199, 5555550199)
+    phone_10_pattern = r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b'
+    text = re.sub(phone_10_pattern, '[REDACTED]', text)
     
-    # Phone with area code in parens
+    # 7-digit phone numbers (e.g., 555-0199, 555.0199)
+    phone_7_pattern = r'\b\d{3}[-.\s]?\d{4}\b'
+    text = re.sub(phone_7_pattern, '[REDACTED]', text)
+    
+    # Phone with area code in parens (e.g., (555) 555-0199)
     phone_parens_pattern = r'\(\d{3}\)\s*\d{3}[-.\s]?\d{4}'
     text = re.sub(phone_parens_pattern, '[REDACTED]', text)
     
