@@ -27,26 +27,4 @@ resource "google_firestore_database" "main" {
   deletion_policy = "DELETE"
 }
 
-# -----------------------------------------------------------------------------
-# Composite Indexes (optional, for query optimization)
-# -----------------------------------------------------------------------------
-
-# Index for querying processed logs by timestamp within a tenant
-resource "google_firestore_index" "processed_logs_by_time" {
-  project    = var.project_id
-  database   = google_firestore_database.main.name
-  collection = "processed_logs"
-
-  fields {
-    field_path = "processed_at"
-    order      = "DESCENDING"
-  }
-
-  fields {
-    field_path = "__name__"
-    order      = "DESCENDING"
-  }
-
-  # This is a collection group index (works across all tenant subcollections)
-  query_scope = "COLLECTION_GROUP"
-}
+# Note: Composite indexes removed - Firestore auto-creates single-field indexes

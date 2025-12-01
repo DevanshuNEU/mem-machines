@@ -197,8 +197,8 @@ resource "google_cloud_run_v2_service" "worker" {
     # Long timeout for processing (9 minutes)
     timeout = "${var.worker_timeout}s"
 
-    # Lower concurrency for CPU-bound work
-    max_instance_request_concurrency = 10
+    # Concurrency 1 for CPU-bound work - each instance handles one message
+    max_instance_request_concurrency = 1
   }
 
   traffic {

@@ -37,7 +37,7 @@ resource "google_pubsub_topic" "main" {
 # -----------------------------------------------------------------------------
 
 resource "google_pubsub_topic" "dlq" {
-  name    = "${var.topic_name}-dlq"
+  name    = "${var.topic_name}-dlq"  # Matches deployed: log-ingestion-dlq
   project = var.project_id
 
   message_retention_duration = "604800s"  # 7 days for DLQ
@@ -80,7 +80,7 @@ resource "google_pubsub_subscription" "dlq" {
 # -----------------------------------------------------------------------------
 
 resource "google_pubsub_subscription" "worker_push" {
-  name    = "${var.topic_name}-worker-push"
+  name    = "${var.topic_name}-sub"  # Matches deployed: log-ingestion-sub
   project = var.project_id
   topic   = google_pubsub_topic.main.name
 

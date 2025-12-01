@@ -15,5 +15,5 @@ variable "region" {
 variable "firestore_location" {
   description = "Firestore database location"
   type        = string
-  default     = "nam5"  # US multi-region (free tier friendly)
+  default     = "us-central1"  # Single region, matches Cloud Run
 }

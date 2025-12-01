@@ -116,6 +116,41 @@ resource "google_project_iam_member" "pubsub_token_creator" {
 }
 
 # -----------------------------------------------------------------------------
+# IAM Bindings for Default Compute Service Account
+# -----------------------------------------------------------------------------
+# These permissions are needed for Cloud Build and Cloud Run
+
+resource "google_project_iam_member" "compute_storage_admin" {
+  project = var.project_id
+  role    = "roles/storage.objectAdmin"
+  member  = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+}
+
+resource "google_project_iam_member" "compute_logging" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+}
+
+resource "google_project_iam_member" "compute_artifact_registry" {
+  project = var.project_id
+  role    = "roles/artifactregistry.writer"
+  member  = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+}
+
+resource "google_project_iam_member" "compute_pubsub" {
+  project = var.project_id
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+}
+
+resource "google_project_iam_member" "compute_firestore" {
+  project = var.project_id
+  role    = "roles/datastore.user"
+  member  = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+}
+
+# -----------------------------------------------------------------------------
 # Pub/Sub Module (deploys after Cloud Run and IAM)
 # -----------------------------------------------------------------------------
 
