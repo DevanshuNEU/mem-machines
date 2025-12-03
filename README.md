@@ -58,6 +58,11 @@ curl -X POST https://ingest-api-774022449866.us-central1.run.app/ingest \
     +------------------+
 ```
 
+Excalidraw
+
+<img width="3095" height="943" alt="image" src="https://github.com/user-attachments/assets/01b087d0-685f-41b7-a654-8be6a19d541b" />
+
+
 Both JSON and Text payloads are normalized into a single internal message format before being published to Pub/Sub. The Worker processes all messages identically regardless of original format.
 
 ---
