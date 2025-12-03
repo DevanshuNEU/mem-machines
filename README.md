@@ -1,13 +1,13 @@
 # Memory Machines Backend Assessment
 
-A scalable, fault-tolerant data ingestion pipeline that handles high-throughput log ingestion with multi-tenant isolation.
+A scalable, fault-tolerant data ingestion pipeline built on Google Cloud Platform. Handles 1000+ RPM with strict multi-tenant isolation, automatic PII redaction, and crash recovery.
 
 ## Live Deployment
 
 | Service | URL |
 |---------|-----|
 | Ingest API | `https://ingest-api-774022449866.us-central1.run.app` |
-| Worker | `https://worker-774022449866.us-central1.run.app` (internal) |
+| Worker | `https://worker-774022449866.us-central1.run.app` (internal only) |
 | Project | `memory-machines-479818` |
 | Region | `us-central1` |
 
@@ -17,13 +17,13 @@ A scalable, fault-tolerant data ingestion pipeline that handles high-throughput 
 # JSON payload
 curl -X POST https://ingest-api-774022449866.us-central1.run.app/ingest \
   -H "Content-Type: application/json" \
-  -d '{"tenant_id": "demo", "text": "Contact: 555-1234, email: test@example.com"}'
+  -d '{"tenant_id": "demo", "text": "Call 555-1234, email test@example.com, SSN 123-45-6789"}'
 
-# Text payload  
+# Text payload
 curl -X POST https://ingest-api-774022449866.us-central1.run.app/ingest \
   -H "Content-Type: text/plain" \
   -H "X-Tenant-ID: demo" \
-  -d "Raw log entry with phone 555-9876"
+  -d "Raw log with phone 555-9876"
 ```
 
 ---
@@ -31,42 +31,104 @@ curl -X POST https://ingest-api-774022449866.us-central1.run.app/ingest \
 ## Architecture
 
 ```
-Client (JSON/TXT) --> Ingest API (Cloud Run) --> Pub/Sub --> Worker (Cloud Run) --> Firestore
-                           |
-                           | 202 Accepted (immediate)
+                                    +------------------+
+                                    |                  |
+    JSON Payload ------------------>|                  |
+    {                               |                  |        +------------+
+      "tenant_id": "acme",          |   Ingest API     |        |            |
+      "text": "..."                 |   (Cloud Run)    |------->|  Pub/Sub   |
+    }                               |                  |        |   Topic    |
+                                    |   - Validates    |        |            |
+    Text Payload ------------------>|   - Normalizes   |        +-----+------+
+    Content-Type: text/plain        |   - Returns 202  |              |
+    X-Tenant-ID: acme               |                  |              |
+    Body: "raw text"                +------------------+              |
+                                                                      | Push
+                                                                      v
+    +------------------+        +------------------+        +------------------+
+    |                  |        |                  |        |                  |
+    |    Firestore     |<-------|     Worker       |<-------|   Pub/Sub        |
+    |                  |        |   (Cloud Run)    |        |   Subscription   |
+    |  tenants/        |        |                  |        |                  |
+    |    {tenant_id}/  |        |   - Processes    |        |   - Push to      |
+    |      processed_  |        |   - Redacts PII  |        |     Worker URL   |
+    |        logs/     |        |   - Writes to DB |        |   - 5 retries    |
+    |          {log}   |        |                  |        |   - DLQ on fail  |
+    |                  |        +------------------+        +------------------+
+    +------------------+
 ```
 
-**Components:**
-
-- **Ingest API**: Validates and normalizes incoming data, publishes to Pub/Sub
-- **Pub/Sub**: Message broker with dead letter queue for failed messages
-- **Worker**: Processes messages, redacts PII, stores in Firestore
-- **Firestore**: Multi-tenant storage using subcollections for isolation
+Both JSON and Text payloads are normalized into a single internal message format before being published to Pub/Sub. The Worker processes all messages identically regardless of original format.
 
 ---
 
-## Key Features
+## Multi-Tenant Architecture
 
-**Non-blocking Ingestion**
-- Returns 202 Accepted immediately
-- Processing happens asynchronously via Pub/Sub
+Data is stored using the Firestore subcollection pattern:
 
-**Multi-tenant Isolation**
-- Data stored in `tenants/{tenant_id}/processed_logs/{log_id}`
-- Physical separation prevents cross-tenant data leaks
+```
+tenants/
+├── acme_corp/
+│   └── processed_logs/
+│       ├── log_abc123
+│       └── log_def456
+├── beta_inc/
+│   └── processed_logs/
+│       └── log_xyz789
+```
 
-**PII Redaction**
-- Phone numbers, emails, SSNs automatically redacted
-- Original text preserved for audit, modified_data contains redacted version
+**Why subcollections over a shared table with tenant_id column?**
 
-**Fault Tolerance**
-- Idempotent writes using log_id as document ID
-- Pub/Sub redelivers on failure (5 retries before DLQ)
-- Scale-to-zero with Cloud Run
+With subcollections, isolation is structural. The query path requires the tenant_id: `tenants/{tenant_id}/processed_logs`. It is physically impossible to accidentally query across tenants. This is not a WHERE clause that a developer might forget - isolation is enforced by the data model itself.
+
+---
+
+## Crash Simulation / Recovery
+
+**Problem:** What happens if the Worker crashes after processing but before saving to Firestore?
+
+Pub/Sub does not receive an acknowledgement, so it redelivers the message. The Worker processes it again. Without safeguards, this creates duplicate records.
+
+**Solution:** Idempotent writes using log_id as document ID.
+
+```python
+# services/worker/src/services/firestore.py
+
+doc_ref = (
+    client.collection("tenants")
+    .document(tenant_id)
+    .collection("processed_logs")
+    .document(log_id)  # <-- log_id as document ID
+)
+doc_ref.set(data)  # Creates OR overwrites
+```
+
+If the same message is processed twice, the second write overwrites the first with identical data. Result: exactly one document, no duplicates, no data loss.
+
+Additionally, a Dead Letter Queue (DLQ) captures messages that fail after 5 delivery attempts, preventing poison messages from blocking the pipeline.
+
+---
+
+## PII Redaction
+
+The Worker automatically redacts sensitive information before storing:
+
+| Type | Pattern | Example |
+|------|---------|---------|
+| Phone (10-digit) | `\d{3}[-.]?\d{3}[-.]?\d{4}` | 555-123-4567 |
+| Phone (7-digit) | `\d{3}[-.]?\d{4}` | 555-1234 |
+| Email | Standard email pattern | user@example.com |
+| SSN | `\d{3}-\d{2}-\d{4}` | 123-45-6789 |
+
+Both original and redacted text are stored:
+- `original_text`: Preserved for audit purposes
+- `modified_data`: PII replaced with `[REDACTED]`
 
 ---
 
 ## Load Test Results
+
+Tested at 1000 RPM with mixed JSON and Text payloads:
 
 ```
 Total Requests:     377
@@ -85,42 +147,33 @@ Latency:
 
 ```
 ├── services/
-│   ├── ingest-api/     # Ingestion gateway
-│   └── worker/         # Processing worker
-├── terraform/          # Infrastructure as code
+│   ├── ingest-api/          # Public ingestion endpoint
+│   │   └── src/
+│   │       ├── api/         # Route handlers
+│   │       ├── models/      # Pydantic schemas
+│   │       └── services/    # Pub/Sub publisher
+│   └── worker/              # Internal processor
+│       └── src/
+│           ├── api/         # Pub/Sub push handler
+│           ├── models/      # Schemas + PII redaction
+│           └── services/    # Firestore client
+├── terraform/               # Infrastructure as Code
 │   ├── modules/
-│   │   ├── cloud-run/
-│   │   ├── pubsub/
-│   │   └── firestore/
+│   │   ├── cloud-run/       # Cloud Run services
+│   │   ├── pubsub/          # Topics, subscriptions, DLQ
+│   │   └── firestore/       # Database setup
 │   └── environments/
-│       └── prod/
+│       └── prod/            # Production config
 ├── scripts/
-│   └── load_test.py    # Load testing script
-└── Makefile            # Development commands
-```
-
----
-
-## Local Development
-
-```bash
-# Setup
-make setup
-source venv/bin/activate
-
-# Run locally
-make run-api      # Port 8080
-make run-worker   # Port 8081
-
-# Run tests
-make test
+│   └── load_test.py         # Load testing script
+└── Makefile                 # Development commands
 ```
 
 ---
 
 ## Deployment
 
-Infrastructure is managed with Terraform:
+### Infrastructure (Terraform)
 
 ```bash
 cd terraform
@@ -129,14 +182,14 @@ terraform plan -var-file=environments/prod/terraform.tfvars
 terraform apply -var-file=environments/prod/terraform.tfvars
 ```
 
-To deploy services:
+### Services (Cloud Run)
 
 ```bash
-# Ingest API
+# Ingest API (public)
 cd services/ingest-api
 gcloud run deploy ingest-api --source . --region us-central1 --allow-unauthenticated
 
-# Worker
+# Worker (internal)
 cd services/worker
 gcloud run deploy worker --source . --region us-central1 --no-allow-unauthenticated
 ```
@@ -147,24 +200,24 @@ gcloud run deploy worker --source . --region us-central1 --no-allow-unauthentica
 
 ### POST /ingest
 
-**JSON Format:**
-```json
-{
-  "tenant_id": "acme_corp",
-  "text": "Log message here",
-  "log_id": "optional_custom_id"
-}
+Accepts JSON or Text payloads. Returns immediately with 202 Accepted.
+
+**JSON:**
+```bash
+curl -X POST https://ingest-api-774022449866.us-central1.run.app/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"tenant_id": "acme", "text": "Log message", "log_id": "optional_id"}'
 ```
 
-**Text Format:**
+**Text:**
+```bash
+curl -X POST https://ingest-api-774022449866.us-central1.run.app/ingest \
+  -H "Content-Type: text/plain" \
+  -H "X-Tenant-ID: acme" \
+  -d "Raw log text here"
 ```
-Content-Type: text/plain
-X-Tenant-ID: acme_corp
 
-Raw log text here
-```
-
-**Response (202 Accepted):**
+**Response:**
 ```json
 {
   "status": "accepted",
@@ -175,18 +228,7 @@ Raw log text here
 
 ---
 
-## Future Improvements
-
-- CI/CD pipeline with Cloud Build triggers
-- Remote Terraform state with GCS backend
-- Custom monitoring dashboards
-- Secrets Manager for sensitive config
-- Per-tenant rate limiting
-
----
-
 ## Author
 
-Devanshu Chicholikar  
-MS Software Engineering, Northeastern University  
-[LinkedIn](https://linkedin.com/in/devanshu-chicholikar) | [Portfolio](https://devanshu.dev)
+Devanshu Chicholikar
+MS Software Engineering, Northeastern University
